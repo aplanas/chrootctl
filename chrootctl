@@ -1,0 +1,161 @@
+#! /usr/bin/bash
+
+IMAGE="ubuntu-20.04-4.4-es-odroid-goA-20200514.img"
+MIRROR="https://odroid.in/mirror/dn.odroid.com/RK3326/ODROID-GO-Advance/Ubuntu/${IMAGE}.xz"
+
+fetch_image() {
+    if [ -e "${IMAGE}" ]; then
+	echo "image is already present, use -f to force the download"
+	exit 1
+    fi
+
+    curl -L "${MIRROR}" | xz -d > "${IMAGE}"
+}
+
+remove_image() {
+    [ -e "${IMAGE}" ] && rm "${IMAGE}"
+}
+
+mount_image() {
+    local dev=$(kpartx -va "${IMAGE}" | grep -E 'loop.*p2' | cut -d " " -f 3)
+    mkdir -p mnt_tmp
+    mount /dev/mapper/${dev} mnt_tmp
+}
+
+umount_image() {
+    sync -f && sync -f
+    umount -l mnt_tmp
+    rmdir mnt_tmp
+    kpartx -vd "${IMAGE}" > /dev/null
+}
+
+create_chroot() {
+    if [ -e chroot ]; then
+	echo "chroot is already present, use -f to force the creation"
+	exit 1
+    fi
+
+    mount_image
+    mkdir chroot
+    echo "extracting data from image into ./chroot ..."
+    rsync -av mnt_tmp/ chroot/ > /dev/null
+    umount_image
+}
+
+destroy_chroot() {
+    [ -e chroot ] && rm -r chroot
+}
+
+binfmt_chroot() {
+    cpu="arm"
+    magic='\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00'
+    mask='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+    echo ":qemu-${cpu}:M::${magic}:${mask}:/usr/bin/qemu-${cpu}-binfmt:P" > /proc/sys/fs/binfmt_misc/register
+    cp /usr/bin/qemu-${cpu}-binfmt /usr/bin/qemu-${cpu} chroot/usr/bin/
+
+    cpu="aarch64"
+    magic='\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00'
+    mask='\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+    echo ":qemu-${cpu}:M::${magic}:${mask}:/usr/bin/qemu-${cpu}-binfmt:P" > /proc/sys/fs/binfmt_misc/register
+    cp /usr/bin/qemu-${cpu}-binfmt /usr/bin/qemu-${cpu} chroot/usr/bin/
+}
+
+resolv_chroot() {
+    cp /etc/resolv.conf chroot/run/systemd/resolve/stub-resolv.conf
+}
+
+mount_chroot() {
+    mount -t devtmpfs devtmpfs chroot/dev
+    mount -t proc proc chroot/proc
+    mount -t sysfs sysfs chroot/sys
+    mount -o rw,nosuid,noexec,relatime,gid=5,mode=620,ptmxmode=000 -t devpts devpts chroot/dev/pts
+}
+
+umount_chroot() {
+    umount chroot/dev/pts
+    umount chroot/sys
+    umount chroot/proc
+    umount chroot/dev
+}
+
+shell_chroot() {
+    binfmt_chroot
+    resolv_chroot
+    mount_chroot
+    chroot ./chroot
+    umount_chroot
+}
+
+print_help() {
+    echo "Usage:"
+    echo "  chrootctl -h                   Display this help message"
+    echo "  chrootctl fetch [-f]           Download official OGO2 image"
+    echo "  chrootctl create [-f]          Create a new chroot"
+    echo "  chrootctl destroy              Remove the current chroot"
+    echo "  chrootctl shell                Enter into the chroot"
+    echo "  chrootctl umount               Umount the chroot bind directories"
+    echo
+    echo "Example:"
+    echo "  chrootctl fetch && chrootctl create && chrootctl shell"
+    echo "  chrootctl umount && chrootctl destroy"    
+}
+
+while getopts ":h" opt; do
+    case ${opt} in
+	h)
+	    print_help
+	    ;;
+	*)
+	    echo "Invalid Option: -${OPTARG}" 1>&2
+	    exit 1
+	    ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+
+cmd=$1; shift
+case "$cmd" in
+    fetch)
+	while getopts ":f" opt; do
+	    case ${opt} in
+		f)
+		    remove_image
+		    ;;
+		*)
+		    echo "invalid option: -${OPTARG}" 1>&2
+		    exit 1
+		    ;;
+	    esac
+	done
+	fetch_image
+	;;
+    create)
+	while getopts ":f" opt; do
+	    case ${opt} in
+		f)
+		    destroy_chroot
+		    ;;
+		*)
+		    echo "invalid option: -${OPTARG}" 1>&2
+		    exit 1
+		    ;;
+	    esac
+	done
+	create_chroot
+	;;
+    destroy)
+	destroy_chroot
+	;;
+    shell)
+	shell_chroot
+	;;
+    umount)
+	umount_chroot
+	;;
+    *)
+	echo "invalid command: ${cmd}"
+	print_help
+	exit 1
+	;;
+esac
