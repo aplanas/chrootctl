@@ -69,6 +69,7 @@ resolv_chroot() {
 }
 
 mount_chroot() {
+    [ ! -z "$1" -a -d "$1" ] && mount --bind "$1" chroot/mnt
     mount -t devtmpfs devtmpfs chroot/dev
     mount -t proc proc chroot/proc
     mount -t sysfs sysfs chroot/sys
@@ -80,12 +81,13 @@ umount_chroot() {
     umount chroot/sys
     umount chroot/proc
     umount chroot/dev
+    umount chroot/mnt &> /dev/null
 }
 
 shell_chroot() {
     binfmt_chroot
     resolv_chroot
-    mount_chroot
+    mount_chroot "$1"
     chroot ./chroot
     umount_chroot
 }
@@ -96,7 +98,7 @@ print_help() {
     echo "  chrootctl fetch [-f]           Download official OGO2 image"
     echo "  chrootctl create [-f]          Create a new chroot"
     echo "  chrootctl destroy              Remove the current chroot"
-    echo "  chrootctl shell                Enter into the chroot"
+    echo "  chrootctl shell [dir]          Enter into the chroot and bind dir"
     echo "  chrootctl umount               Umount the chroot bind directories"
     echo
     echo "Example:"
@@ -153,7 +155,7 @@ case "$cmd" in
 	destroy_chroot
 	;;
     shell)
-	shell_chroot
+	shell_chroot "$1"
 	;;
     umount)
 	umount_chroot
